@@ -81,7 +81,7 @@ app.get("/", (_, res) => res.send("Twilio Live Stream App"));
 app.post("/", async (req, res) => {
   assembly = new WebSocket(
     "wss://api.assemblyai.com/v2/realtime/ws?sample_rate=8000",
-    { headers: { authorization: process.env.apiKey } }
+    { headers: { authorization: process.env.APIKEY } }
   );
 
   res.set("Content-Type", "text/xml");
