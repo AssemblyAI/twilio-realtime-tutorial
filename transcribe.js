@@ -87,14 +87,14 @@ app.post("/", async (req, res) => {
   res.set("Content-Type", "text/xml");
   res.send(
     `<Response>
-            <Start>
-                <Stream url='wss://${req.headers.host}' />
-            </Start>
-            <Say>
-                I will stream the next 60 seconds of audio
-            </Say>
-            <Pause length='60' />
-        </Response>`
+       <Start>
+         <Stream url='wss://${req.headers.host}' />
+       </Start>
+       <Say>
+         Start speaking to see your audio transcribed in the console
+       </Say>
+       <Pause length='60' />
+     </Response>`
   );
 });
 
