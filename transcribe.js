@@ -23,7 +23,21 @@ wss.on("connection", (ws) => {
       case "connected":
         console.info("A new call has started.");
         assembly.onerror = console.error;
-        assembly.onmessage = (assemblyMsg) => console.log(assemblyMsg.data);
+        const texts = {};
+        assembly.onmessage = (assemblyMsg) => {
+          let msg = '';
+      	  const res = JSON.parse(assemblyMsg.data);
+      	  texts[res.audio_start] = res.text;
+      	  const keys = Object.keys(texts);
+      	  keys.sort((a, b) => a - b);
+      	  for (const key of keys) {
+            if (texts[key]) {
+              msg += ` ${texts[key]}`;
+            }
+          }
+      	  console.log(msg);
+        };
+
         break;
 
       case "start":
