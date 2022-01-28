@@ -30,8 +30,8 @@ wss.on("connection", (ws) => {
         console.info("Starting media stream...");
         break;
 
-      case "media":
-        const twiloData = msg.media.payload;
+      case "media":       
+        const twilioData = msg.media.payload;
 
         // Here are the current options explored using the WaveFile lib:
 
@@ -39,7 +39,7 @@ wss.on("connection", (ws) => {
         let wav = new WaveFile();
 
         // Twilio uses MuLaw so we have to encode for that
-        wav.fromScratch(1, 8000, "8m", Buffer.from(twiloData, "base64"));
+        wav.fromScratch(1, 8000, "8m", Buffer.from(twilioData, "base64"));
 
         // This library has a handy method to decode MuLaw straight to 16-bit PCM
         wav.fromMuLaw();
