@@ -1,116 +1,88 @@
-const express = require("express");
-
-const WebSocket = require("ws");
-const WaveFile = require("wavefile").WaveFile;
+const { createServer } = require('http');
+const express = require('express');
+const { WebSocketServer } = require('ws');
+const { RealtimeService } = require('assemblyai');
 
 const app = express();
-const server = require("http").createServer(app);
-const wss = new WebSocket.Server({ server });
+const server = createServer(app);
+// the WebSocket server for the Twilio media stream to connect to.
+const wss = new WebSocketServer({ server });
 
-let assembly;
-let chunks = [];
+app.get('/', (_, res) => res.type('text').send('Twilio media stream transcriber'));
 
-wss.on("connection", (ws) => {
-  console.info("New Connection Initiated");
+// Tell Twilio to say something and then establish a media stream with the WebSocket server
+app.post('/', async (req, res) => {
+  res.type('xml')
+    .send(
+      `<Response>
+        <Say>
+          Speak to see your audio transcribed in the console.
+        </Say>
+        <Connect>
+          <Stream url='wss://${req.headers.host}' />
+        </Connect>
+      </Response>`
+    );
+});
 
-  ws.on("message", (message) => {
-    if (!assembly)
-      return console.error("AssemblyAI's WebSocket must be initialized.");
+wss.on('connection', async (ws) => {
+  console.log('Twilio media stream WebSocket connected')
+  const transcriber = new RealtimeService({
+    apiKey: process.env.ASSEMBLYAI_API_KEY,
+    // Twilio media stream sends audio in mulaw format
+    encoding: 'pcm_mulaw',
+    // Twilio media stream sends audio at 8000 sample rate
+    sampleRate: 8000
+  })
+  const transcriberConnectionPromise = transcriber.connect();
 
+  transcriber.on('transcript.partial', (partialTranscript) => {
+    // Don't print anything when there's silence
+    if (!partialTranscript.text) return;
+    console.clear();
+    console.log(partialTranscript.text);
+  });
+
+  transcriber.on('transcript.final', (finalTranscript) => {
+    console.clear();
+    console.log(finalTranscript.text);
+  });
+
+  transcriber.on('open', () => console.log('Connected to real-time service'));
+  transcriber.on('error', console.error);
+  transcriber.on('close', () => console.log('Disconnected from real-time service'));
+
+  // Message from Twilio media stream
+  ws.on('message', async (message) => {
     const msg = JSON.parse(message);
-
     switch (msg.event) {
-      case "connected":
-        console.info("A new call has started.");
-        assembly.onerror = console.error;
-        const texts = {};
-        assembly.onmessage = (assemblyMsg) => {
-          let msg = '';
-      	  const res = JSON.parse(assemblyMsg.data);
-      	  texts[res.audio_start] = res.text;
-      	  const keys = Object.keys(texts);
-      	  keys.sort((a, b) => a - b);
-      	  for (const key of keys) {
-            if (texts[key]) {
-              msg += ` ${texts[key]}`;
-            }
-          }
-      	  console.log(msg);
-        };
-
+      case 'connected':
+        console.info('Twilio media stream connected');
         break;
 
-      case "start":
-        console.info("Starting media stream...");
+      case 'start':
+        console.info('Twilio media stream started');
         break;
 
-      case "media":       
-        const twilioData = msg.media.payload;
-
-        // Here are the current options explored using the WaveFile lib:
-
-        // We build the wav file from scratch since it comes in as raw data
-        let wav = new WaveFile();
-
-        // Twilio uses MuLaw so we have to encode for that
-        wav.fromScratch(1, 8000, "8m", Buffer.from(twilioData, "base64"));
-
-        // This library has a handy method to decode MuLaw straight to 16-bit PCM
-        wav.fromMuLaw();
-
-        // Here we get the raw audio data in base64
-        const twilio64Encoded = wav.toDataURI().split("base64,")[1];
-
-        // Create our audio buffer
-        const twilioAudioBuffer = Buffer.from(twilio64Encoded, "base64");
-
-        // We send data starting at byte 44 to remove wav headers so our model sees only audio data
-        chunks.push(twilioAudioBuffer.slice(44));
-
-        // We have to chunk data b/c twilio sends audio durations of ~20ms and AAI needs a min of 100ms
-        if (chunks.length >= 5) {
-          // Here we want to concat our buffer to create one single buffer
-          const audioBuffer = Buffer.concat(chunks);
-
-          // Re-encode to base64
-          const encodedAudio = audioBuffer.toString("base64");
-
-          // Finally send to assembly and clear chunks
-          assembly.send(JSON.stringify({ audio_data: encodedAudio }));
-          chunks = [];
-        }
-
+      case 'media':
+        // Make sure the transcriber is connected before sending audio
+        await transcriberConnectionPromise;
+        transcriber.sendAudio(Buffer.from(msg.media.payload, 'base64'));
         break;
 
-      case "stop":
-        console.info("Call has ended");
-        assembly.send(JSON.stringify({ terminate_session: true }));
+      case 'stop':
+        console.info('Twilio media stream stopped');
         break;
     }
   });
+
+  ws.on('close', async () => {
+    console.log('Twilio media stream WebSocket disconnected');
+    await transcriber.close();
+  })
+
+  await transcriberConnectionPromise;
 });
 
-app.get("/", (_, res) => res.send("Twilio Live Stream App"));
-
-app.post("/", async (req, res) => {
-  assembly = new WebSocket(
-    "wss://api.assemblyai.com/v2/realtime/ws?sample_rate=8000",
-    { headers: { authorization: process.env.APIKEY } }
-  );
-
-  res.set("Content-Type", "text/xml");
-  res.send(
-    `<Response>
-       <Start>
-         <Stream url='wss://${req.headers.host}' />
-       </Start>
-       <Say>
-         Start speaking to see your audio transcribed in the console
-       </Say>
-       <Pause length='60' />
-     </Response>`
-  );
-});
-
-console.log("Listening on Port 8080");
+console.log('Listening on port 8080');
 server.listen(8080);
