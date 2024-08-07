@@ -27,6 +27,7 @@ This repo provided by AssemblyAI displays how to use our JavaScript SDK with Twi
 
 - [Transcribe Twilio Phone Calls in Real-Time with AssemblyAI blog post](https://www.assemblyai.com/blog/transcribe-twilio-phone-calls-in-real-time-with-assemblyai/)
 - [Transcribe Twilio Phone Calls in Real-Time with AssemblyAI | JavaScript WebSockets Video Tutorial](https://www.youtube.com/watch?v=3XmtJgWcOT0)
+- [Realtime Phone Call Assistant - Python](https://github.com/saflamini/shared-twilio-realtime)
 
 ## Further Documentation
 
