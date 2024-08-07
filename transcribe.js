@@ -3,6 +3,8 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const { RealtimeService } = require('assemblyai');
 
+require('dotenv').config();
+
 const app = express();
 const server = createServer(app);
 // the WebSocket server for the Twilio media stream to connect to.
