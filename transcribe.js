@@ -1,7 +1,7 @@
 const { createServer } = require('http');
 const express = require('express');
 const { WebSocketServer } = require('ws');
-const { RealtimeService } = require('assemblyai');
+const { AssemblyAI } = require('assemblyai');
 
 require('dotenv').config();
 
@@ -9,6 +9,10 @@ const app = express();
 const server = createServer(app);
 // the WebSocket server for the Twilio media stream to connect to.
 const wss = new WebSocketServer({ server });
+
+const client = new AssemblyAI({
+  apiKey: process.env.ASSEMBLYAI_API_KEY,
+});
 
 app.get('/', (_, res) => res.type('text').send('Twilio media stream transcriber'));
 
@@ -29,30 +33,28 @@ app.post('/', async (req, res) => {
 
 wss.on('connection', async (ws) => {
   console.log('Twilio media stream WebSocket connected')
-  const transcriber = new RealtimeService({
+
+  const transcriber = client.streaming.transcriber({
     apiKey: process.env.ASSEMBLYAI_API_KEY,
     // Twilio media stream sends audio in mulaw format
     encoding: 'pcm_mulaw',
     // Twilio media stream sends audio at 8000 sample rate
     sampleRate: 8000
-  })
+  });
+
   const transcriberConnectionPromise = transcriber.connect();
+  const writer = transcriber.stream().getWriter();
 
-  transcriber.on('transcript.partial', (partialTranscript) => {
-    // Don't print anything when there's silence
-    if (!partialTranscript.text) return;
-    console.clear();
-    console.log(partialTranscript.text);
-  });
-
-  transcriber.on('transcript.final', (finalTranscript) => {
-    console.clear();
-    console.log(finalTranscript.text);
-  });
-
-  transcriber.on('open', () => console.log('Connected to real-time service'));
+  transcriber.on('open', ({ id }) => console.log(`Connected to real-time service (session ID: ${id})`));
   transcriber.on('error', console.error);
-  transcriber.on('close', () => console.log('Disconnected from real-time service'));
+  transcriber.on('close', (code, reason) => console.log('Disconnected from real-time service', code, reason));
+
+  transcriber.on('turn', (turn) => {
+    // Don't print anything when there's silence
+    if (!turn.transcript) return;
+    console.clear();
+    console.log(turn.transcript);
+  });
 
   // Message from Twilio media stream
   ws.on('message', async (message) => {
@@ -69,7 +71,7 @@ wss.on('connection', async (ws) => {
       case 'media':
         // Make sure the transcriber is connected before sending audio
         await transcriberConnectionPromise;
-        transcriber.sendAudio(Buffer.from(msg.media.payload, 'base64'));
+        await writer.write(Buffer.from(msg.media.payload, 'base64'));
         break;
 
       case 'stop':
@@ -80,8 +82,9 @@ wss.on('connection', async (ws) => {
 
   ws.on('close', async () => {
     console.log('Twilio media stream WebSocket disconnected');
+    await writer.close();
     await transcriber.close();
-  })
+  });
 
   await transcriberConnectionPromise;
 });
