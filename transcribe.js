@@ -1,93 +1,80 @@
 const { createServer } = require('http');
 const express = require('express');
 const { WebSocketServer } = require('ws');
-const { AssemblyAI } = require('assemblyai');
-
+const WebSocket = require('ws');
 require('dotenv').config();
 
-const app = express();
-const server = createServer(app);
-// the WebSocket server for the Twilio media stream to connect to.
-const wss = new WebSocketServer({ server });
+const PORT = 8080;
+const AAI_URL = 'wss://streaming.assemblyai.com/v3/ws';
+const AAI_QUERY = new URLSearchParams({
+  encoding:'pcm_mulaw',  
+  sample_rate: 8000,
+  format_turns: true
+}).toString();
 
-const client = new AssemblyAI({
-  apiKey: process.env.ASSEMBLYAI_API_KEY,
-});
+const MIN_BYTES = 480; // 60 ms @ 8-kHz µ-law
 
-app.get('/', (_, res) => res.type('text').send('Twilio media stream transcriber'));
+const silent = buf => buf.every(b => b === 0xFF);
 
-// Tell Twilio to say something and then establish a media stream with the WebSocket server
-app.post('/', async (req, res) => {
-  res.type('xml')
-    .send(
-      `<Response>
-        <Say>
-          Speak to see your audio transcribed in the console.
-        </Say>
-        <Connect>
-          <Stream url='wss://${req.headers.host}' />
-        </Connect>
-      </Response>`
-    );
-});
+startServer();
 
-wss.on('connection', async (ws) => {
-  console.log('Twilio media stream WebSocket connected')
+function startServer () {
+  const app = express();
+  const server = createServer(app);
+  const wss = new WebSocketServer({ server });
 
-  const transcriber = client.streaming.transcriber({
-    apiKey: process.env.ASSEMBLYAI_API_KEY,
-    // Twilio media stream sends audio in mulaw format
-    encoding: 'pcm_mulaw',
-    // Twilio media stream sends audio at 8000 sample rate
-    sampleRate: 8000
+  app.post('/', (req, res) => res.type('xml').send(`
+    <Response>
+      <Connect><Stream url="wss://${req.headers.host}" /></Connect>
+    </Response>`));
+
+  wss.on('connection', handleCall);
+
+  server.listen(PORT, () =>
+    console.log(`Listening on ${PORT}`));
+}
+
+function handleCall (twilioWS) {
+  const aaiWS = new WebSocket(`${AAI_URL}?${AAI_QUERY}`, {
+    headers: { Authorization: process.env.ASSEMBLYAI_API_KEY }
   });
 
-  const transcriberConnectionPromise = transcriber.connect();
-  const writer = transcriber.stream().getWriter();
+  let buf = Buffer.alloc(0);
+  let aaiReady = false;
 
-  transcriber.on('open', ({ id }) => console.log(`Connected to real-time service (session ID: ${id})`));
-  transcriber.on('error', console.error);
-  transcriber.on('close', (code, reason) => console.log('Disconnected from real-time service', code, reason));
-
-  transcriber.on('turn', (turn) => {
-    // Don't print anything when there's silence
-    if (!turn.transcript) return;
-    console.clear();
-    console.log(turn.transcript);
+  aaiWS.on('open', () => { aaiReady = true; });
+  aaiWS.on('message', d => {
+    const m = JSON.parse(d);
+    if (m.type === 'Turn' && m.transcript) console.log(m.transcript);
   });
+  aaiWS.on('error',  console.error);
+  aaiWS.on('close',  () => twilioWS.close());
 
-  // Message from Twilio media stream
-  ws.on('message', async (message) => {
-    const msg = JSON.parse(message);
-    switch (msg.event) {
-      case 'connected':
-        console.info('Twilio media stream connected');
-        break;
-
-      case 'start':
-        console.info('Twilio media stream started');
-        break;
-
-      case 'media':
-        // Make sure the transcriber is connected before sending audio
-        await transcriberConnectionPromise;
-        await writer.write(Buffer.from(msg.media.payload, 'base64'));
-        break;
-
-      case 'stop':
-        console.info('Twilio media stream stopped');
-        break;
+  twilioWS.on('message', raw => {
+    const msg = JSON.parse(raw);
+    if (msg.event !== 'media') {
+      if (msg.event === 'stop') twilioWS.close();
+      return;
     }
+
+    const ulaw = Buffer.from(msg.media.payload, 'base64');
+    if (!aaiReady && silent(ulaw)) return;    // wait for speech
+
+    buf = Buffer.concat([buf, ulaw]);
+    if (!aaiReady || buf.length < MIN_BYTES) return;
+
+    try { aaiWS.send(buf); } catch (e) { console.error(e); }
+    buf = Buffer.alloc(0);
   });
 
-  ws.on('close', async () => {
-    console.log('Twilio media stream WebSocket disconnected');
-    await writer.close();
-    await transcriber.close();
+  /* graceful shutdown */
+  twilioWS.on('close', () => {
+    if (aaiReady && buf.length >= MIN_BYTES) {
+      try { aaiWS.send(buf); } catch {}
+    }
+    if (aaiReady) aaiWS.send(JSON.stringify({ type:'Terminate' }));
+    aaiWS.close();
   });
 
-  await transcriberConnectionPromise;
-});
-
-console.log('Listening on port 8080');
-server.listen(8080);
+  twilioWS.on('error', console.error);
+}
